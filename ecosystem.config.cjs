@@ -8,13 +8,21 @@ module.exports = {
       NODE_ENV: 'development',
       PORT: 8080,
       MAX_CONNECTIONS: 100,
-      CONNECTION_TIMEOUT: 30000
+      CONNECTION_TIMEOUT: 30000,
+      MESSAGE_SIZE_LIMIT: 65536,
+      HEARTBEAT_INTERVAL: 30000,
+      HEARTBEAT_TIMEOUT: 10000,
+      JWT_EXPIRES_IN: '15m'
     },
     env_production: {
       NODE_ENV: 'production',
       PORT: 8080,
       MAX_CONNECTIONS: 1000,
-      CONNECTION_TIMEOUT: 30000
+      CONNECTION_TIMEOUT: 30000,
+      MESSAGE_SIZE_LIMIT: 65536,
+      HEARTBEAT_INTERVAL: 30000,
+      HEARTBEAT_TIMEOUT: 10000,
+      JWT_EXPIRES_IN: '15m'
     },
     // Logging
     log_file: './logs/combined.log',
