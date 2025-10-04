@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH WebSocket Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>SSH WebSocket Client</h1>
+    
+    <!-- Authentication Section -->
+    <div class="section">
+        <h2>Authentication</h2>
+        <div id="authForm">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" value="admin">
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" value="admin123">
+            </div>
+            <button onclick="login()">Login</button>
+            <button onclick="logout()">Logout</button>
+            <button onclick="checkStatus()">Check Status</button>
+        </div>
+        <div id="authStatus"></div>
+        <div id="userInfo" class="hidden">
+            <h3>User Information</h3>
+            <p><strong>Username:</strong> <span id="userName"></span></p>
+            <p><strong>Role:</strong> <span id="userRole"></span></p>
+            <p><strong>Permissions:</strong> <span id="userPermissions"></span></p>
+        </div>
+    </div>
+
+    <!-- SSH Connection Section -->
+    <div class="section">
+        <h2>SSH Connection</h2>
+        <div class="form-group">
+            <label for="sshHost">Host:</label>
+            <input type="text" id="sshHost" value="localhost">
+        </div>
+        <div class="form-group">
+            <label for="sshPort">Port:</label>
+            <input type="number" id="sshPort" value="22">
+        </div>
+        <div class="form-group">
+            <label for="sshUsername">Username:</label>
+            <input type="text" id="sshUsername" value="testuser">
+        </div>
+        <div class="form-group">
+            <label for="sshPassword">Password:</label>
+            <input type="password" id="sshPassword" value="testpass">
+        </div>
+        <button onclick="connectSSH()" id="connectBtn">Connect SSH</button>
+        <button onclick="disconnectSSH()" id="disconnectBtn" disabled>Disconnect SSH</button>
+        <div id="sshStatus"></div>
+    </div>
+
+    <!-- SSH Commands Section -->
+    <div class="section">
+        <h2>SSH Commands</h2>
+        <div class="form-group">
+            <label for="sshCommand">Command:</label>
+            <input type="text" id="sshCommand" placeholder="Enter SSH command (e.g., ls -la)" value="ls -la">
+        </div>
+        <button onclick="sendCommand()" id="sendBtn" disabled>Send Command</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <!-- Output Log -->
+    <div class="section">
+        <h2>Output Log</h2>
+        <div id="outputLog" class="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isAuthenticated = false;
+        let isSSHConnected = false;
+
+        // Authentication functions
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ username, password })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus('authStatus', 'Login successful!', 'success');
+                    showUserInfo(result.user);
+                    isAuthenticated = true;
+                    
+                    // Connect WebSocket
+                    connectWebSocket();
+                } else {
+                    showStatus('authStatus', 'Login failed: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('authStatus', 'Login error: ' + error.message, 'error');
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch('/auth/logout', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                
+                showStatus('authStatus', 'Logged out successfully', 'info');
+                hideUserInfo();
+                isAuthenticated = false;
+                
+                if (ws) {
+                    ws.close();
+                    ws = null;
+                }
+            } catch (error) {
+                showStatus('authStatus', 'Logout error: ' + error.message, 'error');
+            }
+        }
+
+        async function checkStatus() {
+            try {
+                const response = await fetch('/auth/status', {
+                    credentials: 'include'
+                });
+                
+                const result = await response.json();
+                
+                if (result.authenticated) {
+                    showStatus('authStatus', 'Authenticated as: ' + result.user.username, 'success');
+                    showUserInfo(result.user);
+                    isAuthenticated = true;
+                } else {
+                    showStatus('authStatus', 'Not authenticated', 'info');
+                    hideUserInfo();
+                    isAuthenticated = false;
+                }
+            } catch (error) {
+                showStatus('authStatus', 'Status check error: ' + error.message, 'error');
+            }
+        }
+
+        function showUserInfo(user) {
+            document.getElementById('userName').textContent = user.username;
+            document.getElementById('userRole').textContent = user.role;
+            document.getElementById('userPermissions').textContent = user.permissions.join(', ');
+            document.getElementById('userInfo').classList.remove('hidden');
+        }
+
+        function hideUserInfo() {
+            document.getElementById('userInfo').classList.add('hidden');
+        }
+
+        // WebSocket functions
+        function connectWebSocket() {
+            if (ws) {
+                ws.close();
+            }
+
+            ws = new WebSocket('ws://localhost:8080');
+
+            ws.onopen = function() {
+                log('WebSocket connected');
+            };
+
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            };
+
+            ws.onclose = function() {
+                log('WebSocket disconnected');
+                isSSHConnected = false;
+                updateSSHButtons();
+            };
+
+            ws.onerror = function(error) {
+                log('WebSocket error: ' + error.message);
+            };
+        }
+
+        function handleWebSocketMessage(message) {
+            switch (message.type) {
+                case 'auth_success':
+                    log('WebSocket authentication successful');
+                    break;
+                case 'connected':
+                    log('SSH connection established');
+                    isSSHConnected = true;
+                    updateSSHButtons();
+                    break;
+                case 'data':
+                    log('SSH output: ' + message.data);
+                    break;
+                case 'closed':
+                    log('SSH connection closed');
+                    isSSHConnected = false;
+                    updateSSHButtons();
+                    break;
+                case 'error':
+                    log('Error: ' + message.error);
+                    break;
+                case 'ping':
+                    ws.send(JSON.stringify({ type: 'ping' }));
+                    break;
+                case 'pong':
+                    log('Received pong');
+                    break;
+                default:
+                    log('Unknown message: ' + JSON.stringify(message));
+            }
+        }
+
+        // SSH functions
+        function connectSSH() {
+            if (!ws || !isAuthenticated) {
+                showStatus('sshStatus', 'Please authenticate first', 'error');
+                return;
+            }
+
+            const config = {
+                host: document.getElementById('sshHost').value,
+                port: parseInt(document.getElementById('sshPort').value),
+                username: document.getElementById('sshUsername').value,
+                authMethod: 'password',
+                password: document.getElementById('sshPassword').value
+            };
+
+            ws.send(JSON.stringify({
+                type: 'connect',
+                config: config
+            }));
+
+            log('Connecting to SSH server...');
+        }
+
+        function disconnectSSH() {
+            if (ws) {
+                ws.send(JSON.stringify({
+                    type: 'disconnect'
+                }));
+                log('Disconnecting from SSH server...');
+            }
+        }
+
+        function sendCommand() {
+            if (!ws || !isSSHConnected) {
+                showStatus('sshStatus', 'SSH not connected', 'error');
+                return;
+            }
+
+            const command = document.getElementById('sshCommand').value;
+            if (!command) {
+                showStatus('sshStatus', 'Please enter a command', 'error');
+                return;
+            }
+
+            ws.send(JSON.stringify({
+                type: 'data',
+                data: command + '\n'
+            }));
+
+            log('Sent command: ' + command);
+        }
+
+        // Utility functions
+        function updateSSHButtons() {
+            document.getElementById('connectBtn').disabled = !isAuthenticated || isSSHConnected;
+            document.getElementById('disconnectBtn').disabled = !isSSHConnected;
+            document.getElementById('sendBtn').disabled = !isSSHConnected;
+        }
+
+        function showStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function log(message) {
+            const logElement = document.getElementById('outputLog');
+            const timestamp = new Date().toLocaleTimeString();
+            logElement.innerHTML += `[${timestamp}] ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('outputLog').innerHTML = '';
+        }
+
+        // Initialize
+        window.onload = function() {
+            checkStatus();
+        };
+    </script>
+</body>
+</html>

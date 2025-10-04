@@ -118,6 +118,10 @@ logs
 id_rsa*
 *.ppk
 
+# Credentials and sensitive data
+cred.csv
+*.csv
+
 # Temporary files
 tmp/
 temp/
