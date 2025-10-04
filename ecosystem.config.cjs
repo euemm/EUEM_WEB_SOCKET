@@ -1,8 +1,7 @@
 module.exports = {
   apps: [{
-    name: 'ssh-websocket-server',
+    name: 'websocket-server',
     script: 'server.js',
-    instances: 'max',
     exec_mode: 'cluster',
     env: {
       NODE_ENV: 'development',
