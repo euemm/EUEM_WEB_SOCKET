@@ -6,11 +6,22 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop ssh-websocket-server",
+    "pm2:restart": "pm2 restart ssh-websocket-server",
+    "pm2:reload": "pm2 reload ssh-websocket-server",
+    "pm2:delete": "pm2 delete ssh-websocket-server",
+    "pm2:logs": "pm2 logs ssh-websocket-server",
+    "pm2:monit": "pm2 monit",
+    "pm2:status": "pm2 status",
+    "pm2:prod": "pm2 start ecosystem.config.js --env production",
+    "pm2:dev": "pm2 start ecosystem.config.js --env development"
   },
   "dependencies": {
     "ws": "^8.14.2",
-    "ssh2": "^1.15.0"
+    "ssh2": "^1.15.0",
+    "pm2": "^5.3.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
