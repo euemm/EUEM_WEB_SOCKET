@@ -2,10 +2,11 @@ module.exports = {
   apps: [{
     name: 'websocket-server',
     script: 'server.js',
-    exec_mode: 'cluster',
+    instances: 1,
+    exec_mode: 'fork',
     env: {
       NODE_ENV: 'development',
-      PORT: 8080,
+      PORT: 8000,
       BASE_PATH: '',
       MAX_CONNECTIONS: 100,
       CONNECTION_TIMEOUT: 30000,
@@ -16,8 +17,8 @@ module.exports = {
     },
     env_production: {
       NODE_ENV: 'production',
-      PORT: 8080,
-      BASE_PATH: '/ssh-ws',
+      PORT: 8000,
+      BASE_PATH: '',
       MAX_CONNECTIONS: 1000,
       CONNECTION_TIMEOUT: 30000,
       MESSAGE_SIZE_LIMIT: 65536,
