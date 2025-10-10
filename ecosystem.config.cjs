@@ -7,6 +7,7 @@ module.exports = {
     env: {
       NODE_ENV: 'development',
       PORT: 8080,
+      BASE_PATH: '',
       MAX_CONNECTIONS: 100,
       CONNECTION_TIMEOUT: 30000,
       MESSAGE_SIZE_LIMIT: 65536,
@@ -17,6 +18,7 @@ module.exports = {
     env_production: {
       NODE_ENV: 'production',
       PORT: 8080,
+      BASE_PATH: '/ssh-ws',
       MAX_CONNECTIONS: 1000,
       CONNECTION_TIMEOUT: 30000,
       MESSAGE_SIZE_LIMIT: 65536,

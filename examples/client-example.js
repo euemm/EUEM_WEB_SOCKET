@@ -1,6 +1,15 @@
 import WebSocket from 'ws';
 
-const ws = new WebSocket('ws://localhost:8080');
+// Configuration - adjust these for your environment
+const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
+const BASE_PATH = process.env.BASE_PATH || '';
+const WS_URL = BASE_URL.replace('http', 'ws') + BASE_PATH;
+const HTTP_URL = BASE_URL + BASE_PATH;
+
+console.log('Connecting to WebSocket at:', WS_URL);
+console.log('Using HTTP API at:', HTTP_URL);
+
+const ws = new WebSocket(WS_URL);
 
 // Authentication credentials
 const credentials = {
@@ -22,7 +31,7 @@ async function authenticateViaHTTP() {
   try {
     console.log('Attempting HTTP authentication...');
     
-    const response = await fetch('http://localhost:8080/auth/login', {
+    const response = await fetch(HTTP_URL + '/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

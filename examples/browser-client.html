@@ -152,6 +152,12 @@
     </div>
 
     <script>
+        // Configuration - adjust these for your environment
+        const WS_URL = window.location.protocol === 'https:' 
+            ? 'wss://' + window.location.host + (window.location.pathname.replace(/\/$/, '') || '')
+            : 'ws://' + window.location.host + (window.location.pathname.replace(/\/$/, '') || '');
+        const BASE_PATH = window.location.pathname.replace(/\/$/, '') || '';
+        
         let ws = null;
         let isAuthenticated = false;
         let isSSHConnected = false;
@@ -162,7 +168,7 @@
             const password = document.getElementById('password').value;
 
             try {
-                const response = await fetch('/auth/login', {
+                const response = await fetch(BASE_PATH + '/auth/login', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -190,7 +196,7 @@
 
         async function logout() {
             try {
-                await fetch('/auth/logout', {
+                await fetch(BASE_PATH + '/auth/logout', {
                     method: 'POST',
                     credentials: 'include'
                 });
@@ -210,7 +216,7 @@
 
         async function checkStatus() {
             try {
-                const response = await fetch('/auth/status', {
+                const response = await fetch(BASE_PATH + '/auth/status', {
                     credentials: 'include'
                 });
                 
@@ -247,7 +253,8 @@
                 ws.close();
             }
 
-            ws = new WebSocket('ws://localhost:8080');
+            log('Connecting to WebSocket at: ' + WS_URL);
+            ws = new WebSocket(WS_URL);
 
             ws.onopen = function() {
                 log('WebSocket connected');
