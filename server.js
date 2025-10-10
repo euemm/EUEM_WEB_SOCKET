@@ -15,6 +15,7 @@ import { createServer } from 'http';
 // Load environment variables
 dotenv.config();
 const PORT = parseInt(process.env.PORT) || 8080;
+const BASE_PATH = process.env.BASE_PATH || ''; // Base path for reverse proxy (e.g., '/ssh-ws')
 const MAX_CONNECTIONS = parseInt(process.env.MAX_CONNECTIONS) || 100;
 const CONNECTION_TIMEOUT = parseInt(process.env.CONNECTION_TIMEOUT) || 30000; // 30 seconds
 const MESSAGE_SIZE_LIMIT = parseInt(process.env.MESSAGE_SIZE_LIMIT) || 64 * 1024; // 64KB per message
@@ -75,52 +76,9 @@ async function loadUsers() {
 // Create HTTP server
 const app = express();
 
-// CORS configuration for localhost testing
+// CORS configuration - allow all origins since users can join from anywhere
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Get allowed origins from environment variable
-    const envOrigins = process.env.CORS_ORIGIN ? 
-      process.env.CORS_ORIGIN.split(',').map(o => o.trim()) : [];
-    
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    // Allow localhost and 127.0.0.1 with any port
-    if (origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/)) {
-      return callback(null, true);
-    }
-    
-    // Allow specific origins from environment
-    if (envOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    
-    // Allow common development origins
-    const defaultAllowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:8080',
-      'http://localhost:8081',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:3001',
-      'http://127.0.0.1:8080',
-      'http://127.0.0.1:8081'
-    ];
-    
-    if (defaultAllowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    
-    // In production, be more restrictive
-    if (process.env.NODE_ENV === 'production') {
-      console.log(`CORS blocked origin: ${origin}`);
-      return callback(new Error('Not allowed by CORS'), false);
-    }
-    
-    // Allow all origins in development
-    console.log(`CORS allowing origin: ${origin}`);
-    callback(null, true);
-  },
+  origin: '*', // Allow all origins
   credentials: process.env.CORS_CREDENTIALS !== 'false', // Allow cookies to be sent
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
@@ -133,9 +91,10 @@ app.use(cookieParser());
 
 const server = createServer(app);
 
-// Create WebSocket server
+// Create WebSocket server with path support
 const wss = new WebSocketServer({ 
   server,
+  path: BASE_PATH ? `${BASE_PATH}` : undefined,
   maxPayload: MESSAGE_SIZE_LIMIT,
   perMessageDeflate: false // Disable compression for better performance
 });
@@ -143,7 +102,7 @@ const wss = new WebSocketServer({
 let activeConnections = 0;
 
 // HTTP Authentication Routes
-app.post('/auth/login', async (req, res) => {
+app.post(`${BASE_PATH}/auth/login`, async (req, res) => {
 	try {
 		const { username, password } = req.body;
 		
@@ -193,12 +152,12 @@ app.post('/auth/login', async (req, res) => {
 	}
 });
 
-app.post('/auth/logout', (req, res) => {
+app.post(`${BASE_PATH}/auth/logout`, (req, res) => {
 	res.clearCookie('auth_token');
 	res.json({ success: true, message: 'Logged out successfully' });
 });
 
-app.get('/auth/status', (req, res) => {
+app.get(`${BASE_PATH}/auth/status`, (req, res) => {
 	try {
 		const token = req.cookies.auth_token;
 		
@@ -223,7 +182,7 @@ app.get('/auth/status', (req, res) => {
 });
 
 // Serve a simple login page
-app.get('/', (req, res) => {
+app.get(`${BASE_PATH}/`, (req, res) => {
 	res.send(`
 		<!DOCTYPE html>
 		<html>
@@ -258,13 +217,15 @@ app.get('/', (req, res) => {
 			<div id="userInfo" style="margin-top: 20px;"></div>
 			
 			<script>
+				const BASE_PATH = '${BASE_PATH}';
+				
 				document.getElementById('loginForm').addEventListener('submit', async (e) => {
 					e.preventDefault();
 					const formData = new FormData(e.target);
 					const data = Object.fromEntries(formData);
 					
 					try {
-						const response = await fetch('/auth/login', {
+						const response = await fetch(BASE_PATH + '/auth/login', {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
 							body: JSON.stringify(data)
@@ -292,7 +253,7 @@ app.get('/', (req, res) => {
 				
 				async function checkStatus() {
 					try {
-						const response = await fetch('/auth/status');
+						const response = await fetch(BASE_PATH + '/auth/status');
 						const result = await response.json();
 						
 						if (result.authenticated) {
@@ -307,7 +268,7 @@ app.get('/', (req, res) => {
 				
 				async function logout() {
 					try {
-						await fetch('/auth/logout', { method: 'POST' });
+						await fetch(BASE_PATH + '/auth/logout', { method: 'POST' });
 						document.getElementById('userInfo').innerHTML = '';
 						document.getElementById('status').innerHTML = '<div class="status success">Logged out successfully</div>';
 					} catch (error) {
@@ -329,8 +290,10 @@ async function startServer() {
 		await loadUsers();
 		
 		server.listen(PORT, () => {
-			console.log(`SSH WebSocket proxy server running on http://localhost:${PORT}`);
-			console.log(`WebSocket server available at ws://localhost:${PORT}`);
+			const basePath = BASE_PATH || '';
+			console.log(`SSH WebSocket proxy server running on http://localhost:${PORT}${basePath}`);
+			console.log(`WebSocket server available at ws://localhost:${PORT}${basePath}`);
+			console.log(`Base path: ${basePath || '(none - root path)'}`);
 			console.log(`Max connections: ${MAX_CONNECTIONS}`);
 			console.log(`Message size limit: ${MESSAGE_SIZE_LIMIT / 1024}KB`);
 			console.log(`JWT token expires in: ${JWT_EXPIRES_IN}`);
