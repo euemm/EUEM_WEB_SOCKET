@@ -30,7 +30,7 @@ A production-ready WebSocket-to-SSH proxy server with authentication, authorizat
 - Connection pooling and rate limiting
 - Heartbeat monitoring for connection health
 - Comprehensive logging and monitoring
-- Bcrypt password hashing
+- PostgreSQL-backed credential storage with bcrypt verification
 - Message size limits and timeout controls
 - CORS configuration for cross-origin requests
 
@@ -51,11 +51,8 @@ This server bridges that gap securely with enterprise-grade authentication and a
 # Install dependencies
 npm install
 
-# Generate password hash
-npm run generate-hash
-
-# Add a user
-npm run user:add admin admin123 admin
+# Run database connectivity test (requires configured Postgres env vars)
+npm test
 
 # Start server
 npm start
@@ -82,8 +79,9 @@ EUEM_WEB_SOCKET/
 │   └── client-example.js
 ├── server.js             # Main server file
 ├── ecosystem.config.cjs  # PM2 configuration
-├── add-user.js          # User management script
-├── generate-hash.js     # Password hash generator
+├── db.js                # PostgreSQL integration
+├── tests/               # Automated tests
+│   └── db.test.js
 ├── package.json         # Dependencies
 └── .env                 # Environment configuration
 ```
@@ -119,20 +117,35 @@ openssl rand -base64 32
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-5. Update `.env` with your JWT secret:
+5. Update `.env` with your JWT secret and database credentials:
 ```bash
 JWT_SECRET=your-generated-secret-here
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=euem
+DB_PASSWORD=your-db-password
+DB_NAME=euem_db
 ```
 
-6. Create users:
+6. Create or update users directly in PostgreSQL (all passwords must be bcrypt hashes with cost 10):
 ```bash
-# Generate password hash
-npm run generate-hash mypassword123
-
-# Add user
-npm run user:add username mypassword123
-npm run user:add admin adminpass123 admin
+docker exec -it postgres16 psql -U euem -d euem_db
+INSERT INTO users (email, password, first_name, last_name, is_verified, is_enabled)
+VALUES (
+  'operator@example.com',
+  '<bcrypt-hash>',
+  'Ops',
+  'User',
+  TRUE,
+  TRUE
+);
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM users u, roles r
+WHERE u.email = 'operator@example.com' AND r.name = 'ADMIN';
 ```
+
+> Tip: generate a bcrypt hash locally with `node -e "console.log(require('bcryptjs').hashSync('your-password', 10))"`.
 
 7. Start the server:
 ```bash
@@ -172,6 +185,15 @@ JWT_EXPIRES_IN=15m
 # You can override this if needed by uncommenting and setting specific origins
 # CORS_ORIGIN=http://localhost:3000,http://localhost:8080
 CORS_CREDENTIALS=true
+
+# Database Configuration
+# Alternatively, provide DATABASE_URL=postgresql://user:password@host:5432/dbname
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=euem
+DB_PASSWORD=changeme
+DB_NAME=euem_db
+DB_SSL=false
 ```
 
 ### Environment Variable Details
@@ -189,6 +211,13 @@ CORS_CREDENTIALS=true
 | `JWT_EXPIRES_IN` | JWT token expiration | `15m` | `15m` |
 | `CORS_ORIGIN` | Allowed CORS origins | `*` (all) | `https://example.com` |
 | `CORS_CREDENTIALS` | Allow credentials | `true` | `true` |
+| `DATABASE_URL` | Postgres connection string | — | `postgresql://user:pass@host:5432/db` |
+| `DB_HOST` | Postgres host (when `DATABASE_URL` not set) | `localhost` | `postgres.internal` |
+| `DB_PORT` | Postgres port | `5432` | `5432` |
+| `DB_USER` | Postgres user | — | `euem` |
+| `DB_PASSWORD` | Postgres password | — | `super-secret` |
+| `DB_NAME` | Postgres database | `euem_db` | `euem_db` |
+| `DB_SSL` | Enable SSL for Postgres | `false` | `true` |
 
 ### CORS Configuration
 
@@ -210,82 +239,47 @@ CORS_CREDENTIALS=true
 
 Note: When using CORS with credentials and specific origins, you cannot use `*`. The server will automatically handle this configuration.
 
-## User Management
+## Database Integration
 
-### Quick Commands
+### Schema Overview
 
-```bash
-# Add user
-npm run user:add username password [role]
+- `users`: stores operator accounts (email as unique identifier, bcrypt hash in `password`, verification and enablement flags).
+- `roles`: global role definitions (`USER`, `ADMIN` seeded by the init script).
+- `user_roles`: many-to-many join between users and roles.
+- `verification_tokens`: email OTP store (not required for the signaling server, but available if you need email workflows).
 
-# List users
-npm run user:list
+> BCrypt hashes are stored directly in `users.password`. Each hash includes its own salt and cost factor (currently 10).
 
-# Delete user
-npm run user:delete username
+### Creating Users
 
-# Generate password hash
-npm run generate-hash password
+1. Generate a bcrypt hash for the desired password:
+   ```bash
+   node -e "console.log(require('bcryptjs').hashSync('ChangeMe!123', 10))"
+   ```
+2. Insert the user and attach the appropriate role:
+   ```sql
+   INSERT INTO users (email, password, first_name, last_name, is_verified, is_enabled)
+   VALUES ('operator@example.com', '<bcrypt-hash>', 'Ops', 'User', TRUE, TRUE);
 
-# Help
-npm run user:help
-```
+   INSERT INTO user_roles (user_id, role_id)
+   SELECT u.id, r.id
+   FROM users u, roles r
+   WHERE u.email = 'operator@example.com' AND r.name = 'ADMIN';
+   ```
 
-### User Roles
+Any user with an enabled account can authenticate against the WebSocket signaling service; roles can be expanded later if you reintroduce fine-grained permissions.
 
-**Admin Role:**
-- Permissions: `ssh:connect`, `ssh:data`, `ssh:disconnect`, `system:monitor`
-- Description: Full access including system monitoring
-- Use case: Server administrators, system operators
+### Local Verification
 
-**User Role (Default):**
-- Permissions: `ssh:connect`, `ssh:data`, `ssh:disconnect`
-- Description: SSH operations only
-- Use case: Regular users, developers
+- Ensure the `.env` file contains the correct Postgres credentials.
+- Run `npm test` to execute the connectivity smoke test in `tests/db.test.js`.
+- On success, start the server (`npm start`) and authenticate using the inserted credentials.
 
-### Adding Users
+### Operational Tips
 
-```bash
-# Add a regular user
-npm run user:add alice mypassword123
-
-# Add an admin user
-npm run user:add bob secretpass admin
-
-# List all users
-npm run user:list
-```
-
-### CSV File Format
-
-Users are stored in `cred.csv`:
-
-```csv
-username,password,role,permissions
-admin,$2a$10$hash...,admin,"ssh:connect,ssh:data,ssh:disconnect,system:monitor"
-user,$2a$10$hash...,user,"ssh:connect,ssh:data,ssh:disconnect"
-```
-
-**Important:** Never commit `cred.csv` to version control (already in .gitignore)
-
-### User Management Best Practices
-
-1. Use strong passwords (8+ characters, mixed case, numbers, symbols)
-2. Never store plain text passwords (always use bcrypt hashes)
-3. Apply principle of least privilege
-4. Regular audits of user list and permissions
-5. Remove unused accounts
-6. Monitor access logs for authentication attempts
-7. Change default passwords before production use
-
-### Default Users
-
-| Username | Password | Role  | Permissions |
-|----------|----------|-------|-------------|
-| admin    | admin123 | admin | Full access |
-| user     | user123  | user  | SSH only    |
-
-**IMPORTANT:** Change default passwords before production use!
+- For automated provisioning, manage users through migrations or dedicated admin tooling that executes SQL INSERT/UPDATE/DELETE statements.
+- Back up your Postgres database using standard tooling (`pg_dump`, snapshots). The signaling server no longer stores user data on disk.
+- To disable a user quickly, set `is_enabled = FALSE`; authentication will immediately fail for that account.
 
 ## Authentication & Security
 
@@ -955,9 +949,10 @@ proxy_connect_timeout 60;
 #### User Not Found After Adding
 
 **Solution:**
-- Restart the server to load new users
-- Check CSV file format and syntax
-- Verify file permissions on `cred.csv`
+- Verify the account exists in PostgreSQL: `SELECT email, is_enabled FROM users WHERE email = 'operator@example.com';`
+- Ensure the password column contains a valid bcrypt hash (starts with `$2`)
+- Confirm `is_enabled = TRUE` and the user has an entry in `user_roles`
+- Review server logs for authentication failures
 
 #### JWT_SECRET Not Set
 
@@ -978,8 +973,8 @@ proxy_connect_timeout 60;
 - [ ] CORS settings allow your origin
 - [ ] SSL certificates valid (if using HTTPS)
 - [ ] JWT_SECRET is set and secure
-- [ ] Users exist in cred.csv with correct permissions
-- [ ] File permissions on cred.csv are correct
+- [ ] Database credentials are correct and reachable
+- [ ] Operator account exists in `users` with `is_enabled = TRUE`
 
 ### Debug Commands
 
@@ -1006,11 +1001,8 @@ lsof -i :8080
 # Verify environment variables
 node -e "require('dotenv').config(); console.log(process.env)"
 
-# List users
-npm run user:list
-
-# Test password hash
-npm run generate-hash testpassword
+# Inspect users in Postgres
+docker exec -it postgres16 psql -U euem -d euem_db -c "SELECT email, is_enabled FROM users;"
 ```
 
 ### Performance Issues
@@ -1044,8 +1036,8 @@ pm2 monit
 ### Backup Critical Files
 
 ```bash
-# Backup user credentials
-cp cred.csv cred.csv.backup
+# Backup operator database (example using docker)
+docker exec postgres16 pg_dump -U euem -d euem_db > euem_db_$(date +%F).sql
 
 # Backup environment configuration
 cp .env .env.backup
@@ -1060,9 +1052,11 @@ pm2 save
 # Restore PM2 processes
 pm2 resurrect
 
-# Restore files
-cp cred.csv.backup cred.csv
+# Restore environment file
 cp .env.backup .env
+
+# Restore database backup
+psql -h localhost -U euem -d euem_db < euem_db_backup.sql
 
 # Restart server
 npm run pm2:restart
