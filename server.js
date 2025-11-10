@@ -6,11 +6,8 @@ import { WebSocketServer } from 'ws';
 import { Client as SSHClient } from 'ssh2';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import fs from 'fs';
-import csv from 'csv-parser';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer } from 'http';
+import { findUserByIdentifier, verifyDatabaseConnection, buildAuthProfile } from './db.js';
 
 // Load environment variables
 dotenv.config();
@@ -23,55 +20,6 @@ const HEARTBEAT_INTERVAL = parseInt(process.env.HEARTBEAT_INTERVAL) || 30000; //
 const HEARTBEAT_TIMEOUT = parseInt(process.env.HEARTBEAT_TIMEOUT) || 10000; // 10 seconds
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '15m'; // 15 minutes
-
-// Get current directory for ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// User store loaded from CSV
-let users = new Map();
-
-// Load users from CSV file
-async function loadUsers() {
-	const csvPath = path.join(__dirname, 'cred.csv');
-
-	try {
-		if (!fs.existsSync(csvPath)) {
-			console.error('cred.csv file not found. Please create it with user credentials.');
-			process.exit(1);
-		}
-
-		return new Promise((resolve, reject) => {
-			const csvUsers = [];
-
-			fs.createReadStream(csvPath)
-				.pipe(csv())
-				.on('data', (row) => {
-					// Parse permissions from comma-separated string
-					const permissions = row.permissions ? row.permissions.split(',').map(p => p.trim()) : [];
-
-					csvUsers.push({
-						username: row.username,
-						password: row.password, // Should be bcrypt hashed
-						role: row.role,
-						permissions: permissions
-					});
-				})
-				.on('end', () => {
-					users = new Map(csvUsers.map(user => [user.username, user]));
-					console.log(`Loaded ${users.size} users from cred.csv`);
-					resolve();
-				})
-				.on('error', (error) => {
-					console.error('Error reading cred.csv:', error);
-					reject(error);
-				});
-		});
-	} catch (error) {
-		console.error('Failed to load users from CSV:', error);
-		process.exit(1);
-	}
-}
 
 // Create HTTP server
 const app = express();
@@ -104,23 +52,31 @@ let activeConnections = 0;
 // HTTP Authentication Routes
 app.post(`${BASE_PATH}/auth/login`, async (req, res) => {
 	try {
-		const { username, password } = req.body;
+		const { username, email, password } = req.body;
 		
-		if (!username || !password) {
-			return res.status(400).json({ error: 'Username and password required' });
+		if ((!username && !email) || !password) {
+			return res.status(400).json({ error: 'Username (email) and password required' });
 		}
 
-		const userData = users.get(username);
-		if (!userData || !bcrypt.compareSync(password, userData.password)) {
+		const identifier = username || email;
+		const userRecord = await findUserByIdentifier(identifier);
+
+		if (!userRecord || !userRecord.is_enabled) {
 			return res.status(401).json({ error: 'Invalid credentials' });
 		}
+
+		if (!bcrypt.compareSync(password, userRecord.password)) {
+			return res.status(401).json({ error: 'Invalid credentials' });
+		}
+
+		const profile = buildAuthProfile(userRecord);
 
 		// Generate JWT token
 		const token = jwt.sign(
 			{ 
-				username: userData.username, 
-				role: userData.role,
-				permissions: userData.permissions 
+				username: profile.username, 
+				role: profile.role,
+				permissions: profile.permissions 
 			},
 			JWT_SECRET,
 			{ expiresIn: JWT_EXPIRES_IN }
@@ -139,13 +95,13 @@ app.post(`${BASE_PATH}/auth/login`, async (req, res) => {
 		res.json({
 			success: true,
 			user: {
-				username: userData.username,
-				role: userData.role,
-				permissions: userData.permissions
+				username: profile.username,
+				role: profile.role,
+				permissions: profile.permissions
 			}
 		});
 
-		console.log(`User ${username} authenticated via HTTP`);
+		console.log(`User ${profile.username} authenticated via HTTP`);
 	} catch (error) {
 		console.error('HTTP authentication error:', error);
 		res.status(500).json({ error: 'Authentication failed' });
@@ -287,7 +243,7 @@ app.get(`${BASE_PATH}/`, (req, res) => {
 // Initialize server
 async function startServer() {
 	try {
-		await loadUsers();
+		await verifyDatabaseConnection();
 		
 		server.listen(PORT, () => {
 			const basePath = BASE_PATH || '';
@@ -492,25 +448,34 @@ wss.on('connection', (ws, req) => {
   // Authentication handler
   async function handleAuth(ws, message) {
 		try {
-			const { username, password } = message;
+			const { username, email, password } = message;
 
-			if (!username || !password) {
-				sendError(ws, 'Username and password required');
+			if ((!username && !email) || !password) {
+				sendError(ws, 'Username (email) and password required');
 				return;
 			}
 
-			const userData = users.get(username);
-			if (!userData || !bcrypt.compareSync(password, userData.password)) {
+			const identifier = username || email;
+			const userRecord = await findUserByIdentifier(identifier);
+
+			if (!userRecord || !userRecord.is_enabled) {
 				sendError(ws, 'Invalid credentials');
 				return;
 			}
 
+			if (!bcrypt.compareSync(password, userRecord.password)) {
+				sendError(ws, 'Invalid credentials');
+				return;
+			}
+
+			const profile = buildAuthProfile(userRecord);
+
 			// Generate JWT token
 			const token = jwt.sign(
 				{
-					username: userData.username,
-					role: userData.role,
-					permissions: userData.permissions
+					username: profile.username,
+					role: profile.role,
+					permissions: profile.permissions
 				},
 				JWT_SECRET,
 				{ expiresIn: JWT_EXPIRES_IN }
@@ -518,21 +483,21 @@ wss.on('connection', (ws, req) => {
 
       isAuthenticated = true;
       user = {
-        ...userData,
-        token: token
+				...profile,
+				token: token
       };
 
       ws.send(JSON.stringify({
         type: 'auth_success',
         token,
         user: {
-          username: userData.username,
-          role: userData.role,
-          permissions: userData.permissions
+					username: profile.username,
+					role: profile.role,
+					permissions: profile.permissions
         }
       }));
 
-			console.log(`User ${username} authenticated successfully`);
+			console.log(`User ${profile.username} authenticated successfully`);
 		} catch (error) {
 			console.error('Authentication error:', error);
 			sendError(ws, 'Authentication failed');
